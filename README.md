@@ -42,7 +42,7 @@ conda activate IGEV_plusplus
 ### Dependencies
 
 ```Shell
-pip install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torchaudio==0.12.1 --extra-index-url https://download.pytorch.org/whl/cu113
+pip3 install torch torchvision torchaudio
 pip install tqdm
 pip install scipy
 pip install opencv-python

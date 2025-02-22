@@ -74,17 +74,17 @@ if __name__ == '__main__':
 
     # Architecture choices
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[128]*3, help="hidden state and context dimensions")
-    parser.add_argument('--corr_levels', type=int, default=2, help="number of levels in the correlation pyramid")
-    parser.add_argument('--corr_radius', type=int, default=4, help="width of the correlation pyramid")
-    parser.add_argument('--n_downsample', type=int, default=2, help="resolution of the disparity field (1/2^K)")
-    parser.add_argument('--n_gru_layers', type=int, default=3, help="number of hidden GRU levels")
-    parser.add_argument('--max_disp', type=int, default=768, help="max disp range")
-    parser.add_argument('--s_disp_range', type=int, default=48, help="max disp of small disparity-range geometry encoding volume")
-    parser.add_argument('--m_disp_range', type=int, default=96, help="max disp of medium disparity-range geometry encoding volume")
-    parser.add_argument('--l_disp_range', type=int, default=192, help="max disp of large disparity-range geometry encoding volume")
-    parser.add_argument('--s_disp_interval', type=int, default=1, help="disp interval of small disparity-range geometry encoding volume")
-    parser.add_argument('--m_disp_interval', type=int, default=2, help="disp interval of medium disparity-range geometry encoding volume")
-    parser.add_argument('--l_disp_interval', type=int, default=4, help="disp interval of large disparity-range geometry encoding volume")
+    parser.add_argument('--corr_levels',            type=int, default=2,       help="number of levels in the correlation pyramid")
+    parser.add_argument('--corr_radius',            type=int, default=4,       help="width of the correlation pyramid")
+    parser.add_argument('--n_downsample',           type=int, default=2,       help="resolution of the disparity field (1/2^K)")
+    parser.add_argument('--n_gru_layers',           type=int, default=3,       help="number of hidden GRU levels")
+    parser.add_argument('--max_disp',               type=int, default=768,     help="max disp range")
+    parser.add_argument('--s_disp_range',           type=int, default=48,      help="max disp of small disparity-range geometry encoding volume")
+    parser.add_argument('--m_disp_range',           type=int, default=96,      help="max disp of medium disparity-range geometry encoding volume")
+    parser.add_argument('--l_disp_range',           type=int, default=192,     help="max disp of large disparity-range geometry encoding volume")
+    parser.add_argument('--s_disp_interval',        type=int, default=1,       help="disp interval of small disparity-range geometry encoding volume")
+    parser.add_argument('--m_disp_interval',        type=int, default=2,       help="disp interval of medium disparity-range geometry encoding volume")
+    parser.add_argument('--l_disp_interval',        type=int, default=4,       help="disp interval of large disparity-range geometry encoding volume")
     
     args = parser.parse_args()
 
