@@ -13,8 +13,6 @@ from utils.utils import InputPadder
 import os
 import argparse
 
-
-# Set CUDA device
 DEVICE = 'cuda'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from sklearn.cluster import DBSCAN
@@ -38,22 +36,15 @@ class StereoInferenceNode(Node):
     def __init__(self):
         super().__init__('stereo_inference_node')
 
-        # ROS 2 subscribers
         self.sub_left = self.create_subscription(Image, '/chrono_ros_node/stereo/left', self.left_callback, 10)
         self.sub_right = self.create_subscription(Image, '/chrono_ros_node/stereo/right', self.right_callback, 10)
-
-        # ROS 2 publisher for the disparity map
         self.pub_disparity = self.create_publisher(Image, '/chrono_ros_node/stereo/disparity', 10)
-
-        # OpenCV Bridge
         self.bridge = CvBridge()
-
-        # Store images until both left & right arrive
         self.left_image = None
         self.right_image = None
 
         default_args = argparse.Namespace(
-            restore_ckpt='./pretrained_models/middlebury.pth',  # Add this line
+            restore_ckpt='./pretrained_models/middlebury.pth',
             mixed_precision=False,
             precision_dtype='float32',
             valid_iters=16,
@@ -71,39 +62,28 @@ class StereoInferenceNode(Node):
             l_disp_interval=4,
         )
 
-        # Load the IGEV Stereo model
         self.model = torch.nn.DataParallel(IGEVStereo(default_args))
         self.model.load_state_dict(torch.load(default_args.restore_ckpt))
         self.model = self.model.module.to(DEVICE).eval()
-
         self.get_logger().info("Stereo Inference Node Initialized")
 
     def left_callback(self, msg):
-        """ Callback for left stereo image """
         self.left_image = cv2.flip(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'), 0)
-        # cv2.imshow("Left Image", self.left_image)
-        # cv2.waitKey(1) 
         self.process_images()
 
     def right_callback(self, msg):
-        """ Callback for right stereo image """
         self.right_image = cv2.flip(self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8'), 0) 
-        # cv2.imshow("Right Image", self.right_image)
-        # cv2.waitKey(1)
         self.process_images()
 
     def process_images(self):
-        """ Runs inference on the stereo images and publishes the disparity map """
+
         if self.left_image is None or self.right_image is None:
             return
 
         self.get_logger().info("Processing stereo images...")
 
-        # Convert to PyTorch tensors
         image1 = torch.from_numpy(self.left_image).permute(2, 0, 1).float().unsqueeze(0).to(DEVICE)
         image2 = torch.from_numpy(self.right_image).permute(2, 0, 1).float().unsqueeze(0).to(DEVICE)
-
-        # Ensure dimensions compatibility
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
 
@@ -113,7 +93,6 @@ class StereoInferenceNode(Node):
         disparity = padder.unpad(disparity)
         disparity = disparity.cpu().numpy().squeeze()
 
-        # Normalize disparity for visualization
         disp_vis = cv2.normalize(disparity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         disp_vis3c = cv2.cvtColor(disp_vis, cv2.COLOR_GRAY2BGR)
         disp_colored = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
@@ -127,11 +106,8 @@ class StereoInferenceNode(Node):
         cv2.imshow("Disparity Map", combined)
         cv2.waitKey(1)
 
-        # Publish disparity as a ROS 2 topic
         disparity_msg = self.bridge.cv2_to_imgmsg(disp_colored, encoding="bgr8")
         self.pub_disparity.publish(disparity_msg)
-
-        # Reset images after processing
         self.left_image = None
         self.right_image = None
 
@@ -140,8 +116,8 @@ def main(args=None):
     node = StereoInferenceNode()
     try:
         while rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.1)  # Process ROS messages
-            key = cv2.waitKey(1) & 0xFF  # Wait for key press
+            rclpy.spin_once(node, timeout_sec=0.1)
+            key = cv2.waitKey(1) & 0xFF
             
             if key == 27:
                 print("Exiting...")
