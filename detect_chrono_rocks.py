@@ -21,24 +21,16 @@ from sklearn.cluster import DBSCAN
 import argparse
 
 def detect_obstacles(disparity):
-    """ Applies DBSCAN clustering on disparity gradients to detect obstacles. """
-    
-    # Step 1: Normalize & preprocess disparity
-    # disparity_blur = cv2.GaussianBlur(disparity, (5, 5), 0)
-    # disparity_norm = cv2.normalize(disparity_blur, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
     disparity = cv2.bilateralFilter(disparity, 7, 50, 50)
-    edge = cv2.Canny(disparity, 15, 40)  # Tune thresholds if needed
+    edge = cv2.Canny(disparity, 15, 40) 
     contours, _ = cv2.findContours(edge, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bounding_boxes = []
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        # Avoid division by zero and check for significant shapes
-        if h > 0 and w > 0 and w * h > 50 and w/h < 10:  # Ignore very small noise
+        if h > 0 and w > 0 and w * h > 50 and w/h < 10:
             bounding_boxes.append((x, y, w, h))
-
-    # cv2.imshow("Obstacle Map (DBSCAN on Disparity)", edge)
-    # cv2.waitKey(1)
 
     return bounding_boxes
 
@@ -130,7 +122,7 @@ class StereoInferenceNode(Node):
         bounding_boxes = detect_obstacles(disp_vis)
 
         for x, y, w, h in bounding_boxes:
-            cv2.rectangle(combined, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(combined, (x-5, y-5), (x + w+5, y + h+5), (0, 255, 0), 2)
         
         cv2.imshow("Disparity Map", combined)
         cv2.waitKey(1)
