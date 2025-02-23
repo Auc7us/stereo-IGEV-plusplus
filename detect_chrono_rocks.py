@@ -20,26 +20,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from sklearn.cluster import DBSCAN
 import argparse
 
-# def detect_obstacles(disparity):
-
-#     # disparity_filtered = cv2.bilateralFilter(disparity, 7, 25, 25)
-
-#     # Step 3: Compute depth discontinuities (Laplacian gradient)
-#     laplacian = cv2.Laplacian(disparity, cv2.CV_64F, ksize=3)
-#     laplacian = np.abs(laplacian)
-#     laplacian = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-#     sobel_x = cv2.Sobel(disparity, cv2.CV_64F, 1, 0, ksize=3)  # Horizontal
-#     sobel_y = cv2.Sobel(disparity, cv2.CV_64F, 0, 1, ksize=3)  # Vertical
-#     sobel = cv2.magnitude(sobel_x, sobel_y)
-#     sobel = cv2.normalize(sobel, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-#     # Display the results
-#     cv2.imshow("sobel Rocks", sobel)
-#     cv2.waitKey(1)
-
-#     return sobel
-
 def detect_obstacles(disparity):
     """ Applies DBSCAN clustering on disparity gradients to detect obstacles. """
     
