@@ -100,8 +100,26 @@ class StereoInferenceNode(Node):
 
         bounding_boxes = detect_obstacles(disp_vis)
 
+        B = 0.4  # Baseline in meters
+        f = 831.38  # Focal length in pixels
+
         for x, y, w, h in bounding_boxes:
+            # Get disparity value at the center pixel
+            x_center = int(x + w / 2)
+            y_center = int(y + h / 2)
+
+            d = disparity[y_center, x_center]
+
+            # Compute depth (avoid division by zero)
+            if d > 0:
+                Z = (B * f) / d
+                self.get_logger().info(f"Rock detected at ({x_center}, {y_center}) with depth: {Z:.2f} meters")
+            else:
+                Z = float('inf')  # Infinite depth if disparity is zero
+                self.get_logger().warn(f"Rock at ({x_center}, {y_center}) has invalid disparity (depth unknown)")
+
             cv2.rectangle(combined, (x-5, y-5), (x + w+5, y + h+5), (0, 255, 0), 2)
+            cv2.putText(combined, f"{Z:.2f}m", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         cv2.imshow("Disparity Map", combined)
         cv2.waitKey(1)
