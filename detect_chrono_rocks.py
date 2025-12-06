@@ -15,8 +15,8 @@ import argparse
 
 DEVICE = 'cuda'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-from sklearn.cluster import DBSCAN
-import argparse
+# from sklearn.cluster import DBSCAN
+# import argparse
 
 def detect_obstacles(disparity):
 

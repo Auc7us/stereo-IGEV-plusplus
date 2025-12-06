@@ -30,14 +30,14 @@ python demo_imgs.py --restore_ckpt ./pretrained_models/igev_plusplus/sceneflow.p
 You can switch to your own test data directory, or place your own pairs of test images in ./demo-imgs.
 
 ## Environment
-* NVIDIA RTX 3090
-* python 3.8
+* NVIDIA RTX 4080
+* python 3.10
 
 ### Create a virtual environment and activate it.
 
 ```Shell
-conda create -n IGEV_plusplus python=3.8
-conda activate IGEV_plusplus
+conda create -n igev python=3.10
+conda activate igev
 ```
 ### Dependencies
 
