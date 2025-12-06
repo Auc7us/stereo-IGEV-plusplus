@@ -50,7 +50,7 @@ pip install scikit-image
 pip install tensorboard
 pip install matplotlib 
 pip install timm==0.5.4
-
+pip install cv_bridge
 ```
 
 ## Required Data

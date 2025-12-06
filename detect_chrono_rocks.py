@@ -113,6 +113,9 @@ class StereoInferenceNode(Node):
             # Compute depth (avoid division by zero)
             if d > 0:
                 Z = (B * f) / d
+                approx_width_m = (w / f) * Z
+                if approx_width_m > 1.0:
+                    continue
                 self.get_logger().info(f"Rock detected at ({x_center}, {y_center}) with depth: {Z:.2f} meters")
             else:
                 Z = float('inf')  # Infinite depth if disparity is zero
