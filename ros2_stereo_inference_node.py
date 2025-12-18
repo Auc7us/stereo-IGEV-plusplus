@@ -30,6 +30,7 @@ class StereoInferenceNode(Node):
 
         # ROS 2 publisher for the disparity map
         self.pub_disparity = self.create_publisher(Image, '/chrono_ros_node/stereo/disparity', 10)
+        self.pub_disparity_raw = self.create_publisher(Image, '/chrono_ros_node/stereo/disparity_raw', 10)
 
         # OpenCV Bridge
         self.bridge = CvBridge()
@@ -110,6 +111,8 @@ class StereoInferenceNode(Node):
         # Publish disparity as a ROS 2 topic
         disparity_msg = self.bridge.cv2_to_imgmsg(disp_colored, encoding="bgr8")
         self.pub_disparity.publish(disparity_msg)
+        disparity_raw_msg = self.bridge.cv2_to_imgmsg(disparity.astype(np.float32), encoding="32FC1")
+        self.pub_disparity_raw.publish(disparity_raw_msg)
 
         # Reset images after processing
         self.left_image = None

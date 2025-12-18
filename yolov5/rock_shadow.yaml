@@ -1,0 +1,21 @@
+# Custom object class config for rocks and shadows
+
+
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+# path: /home/bohsun/UW_Madison/Research/YOLO_dataset_real  # dataset root dir
+path: /home/bohsun/UW_Madison/Research/YOLO_dataset_synth  # dataset root dir
+# path: /home/bohsun/UW_Madison/Research/SynthDataset_Default  # dataset root dir of Default model
+# path: /home/bohsun/UW_Madison/Research/SynthDataset_Hapke  # dataset root dir of Hapke model
+train: images/train  # train images (relative to 'path'), 366 images
+val: images/train  # val images (relative to 'path'), 336 images
+test: images/test # test images (optional)
+
+
+# Classes
+names:
+  0: rock
+  1: shadow
+
+
+
+

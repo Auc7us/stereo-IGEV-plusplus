@@ -36,8 +36,8 @@ You can switch to your own test data directory, or place your own pairs of test 
 ### Create a virtual environment and activate it.
 
 ```Shell
-conda create -n igev python=3.10
-conda activate igev
+python3.10 -m venv .igev
+source .igev/bin/activate
 ```
 ### Dependencies
 

@@ -18,19 +18,35 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 # from sklearn.cluster import DBSCAN
 # import argparse
 
+# Minimum object size requirements
+MIN_WIDTH_PX = 20
+MIN_HEIGHT_PX = 20
+MIN_WIDTH_M = 0.10
+MIN_HEIGHT_M = 0.10
+
 def detect_obstacles(disparity):
 
-    disparity = cv2.bilateralFilter(disparity, 7, 50, 50)
-    edge = cv2.Canny(disparity, 15, 40) 
+    kernel = np.ones((5, 5), np.uint8)
+    cleaned = cv2.morphologyEx(disparity, cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+    disparity_blur = cv2.bilateralFilter(cleaned, 5, 50, 50)
+    edge = cv2.Canny(disparity_blur, 15, 40)
     contours, _ = cv2.findContours(edge, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bounding_boxes = []
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        if h > 0 and w > 0 and w * h > 50 and w/h < 10:
+        if (
+            h > 0
+            and w > 0
+            and w * h > 50
+            and w / h < 5
+            and w >= MIN_WIDTH_PX
+            and h >= MIN_HEIGHT_PX
+        ):
             bounding_boxes.append((x, y, w, h))
 
-    return bounding_boxes
+    return bounding_boxes, disparity_blur, edge
 
 class StereoInferenceNode(Node):
     def __init__(self):
@@ -39,6 +55,7 @@ class StereoInferenceNode(Node):
         self.sub_left = self.create_subscription(Image, '/chrono_ros_node/stereo/left', self.left_callback, 10)
         self.sub_right = self.create_subscription(Image, '/chrono_ros_node/stereo/right', self.right_callback, 10)
         self.pub_disparity = self.create_publisher(Image, '/chrono_ros_node/stereo/disparity', 10)
+        self.pub_disparity_raw = self.create_publisher(Image, '/chrono_ros_node/stereo/disparity_raw', 10)
         self.bridge = CvBridge()
         self.left_image = None
         self.right_image = None
@@ -93,20 +110,23 @@ class StereoInferenceNode(Node):
         disparity = padder.unpad(disparity)
         disparity = disparity.cpu().numpy().squeeze()
 
-        disp_vis = cv2.normalize(disparity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        disp_vis3c = cv2.cvtColor(disp_vis, cv2.COLOR_GRAY2BGR)
-        disp_colored = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
-        combined = np.concatenate([disp_vis3c, disp_colored], axis=1)
+        # Work on the full left image; pre-clean with morphology to drop stars/noise.
+        img_gray = cv2.cvtColor(self.left_image, cv2.COLOR_BGR2GRAY)
 
-        bounding_boxes = detect_obstacles(disp_vis)
+        bounding_boxes, img_blur, img_edge = detect_obstacles(img_gray)
 
         B = 0.4  # Baseline in meters
         f = 831.38  # Focal length in pixels
+
+        detections_overlay = self.left_image.copy()
 
         for x, y, w, h in bounding_boxes:
             # Get disparity value at the center pixel
             x_center = int(x + w / 2)
             y_center = int(y + h / 2)
+
+            if y_center < 0 or y_center >= disparity.shape[0] or x_center < 0 or x_center >= disparity.shape[1]:
+                continue
 
             d = disparity[y_center, x_center]
 
@@ -114,21 +134,33 @@ class StereoInferenceNode(Node):
             if d > 0:
                 Z = (B * f) / d
                 approx_width_m = (w / f) * Z
-                if approx_width_m > 1.0:
+                approx_height_m = (h / f) * Z
+                if (
+                    approx_width_m > 3.0
+                    or approx_width_m < MIN_WIDTH_M
+                    or approx_height_m < MIN_HEIGHT_M
+                ):
                     continue
                 self.get_logger().info(f"Rock detected at ({x_center}, {y_center}) with depth: {Z:.2f} meters")
             else:
                 Z = float('inf')  # Infinite depth if disparity is zero
                 self.get_logger().warn(f"Rock at ({x_center}, {y_center}) has invalid disparity (depth unknown)")
 
-            cv2.rectangle(combined, (x-5, y-5), (x + w+5, y + h+5), (0, 255, 0), 2)
-            cv2.putText(combined, f"{Z:.2f}m", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        cv2.imshow("Disparity Map", combined)
+            cv2.rectangle(detections_overlay, (x-5, y-5), (x + w+5, y + h+5), (0, 255, 0), 2)
+            cv2.putText(detections_overlay, f"{Z:.2f}m", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        cv2.imshow("Blurred", img_blur)
+        cv2.imshow("Canny Edges", img_edge)
+        cv2.imshow("Detections", detections_overlay)
         cv2.waitKey(1)
 
+        # Still publish disparity for downstream consumers, even though detection uses ROI edges.
+        disp_vis = cv2.normalize(disparity, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        disp_colored = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
         disparity_msg = self.bridge.cv2_to_imgmsg(disp_colored, encoding="bgr8")
         self.pub_disparity.publish(disparity_msg)
+        disparity_raw_msg = self.bridge.cv2_to_imgmsg(disparity.astype(np.float32), encoding="32FC1")
+        self.pub_disparity_raw.publish(disparity_raw_msg)
         self.left_image = None
         self.right_image = None
 
