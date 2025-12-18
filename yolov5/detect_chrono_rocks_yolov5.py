@@ -37,6 +37,9 @@ AVOID_RADIUS_M = 1.25          # required clearance from path center to rock
 DETROUR_EXTRA_M = 0.75         # extra margin beyond rock clearance
 DETROUR_COMPLETE_THRESH = 0.8  # how close we must get to detour waypoint before resuming goal
 REPLAN_MIN_ADVANCE_M = 0.75    # ignore rocks behind the rover
+OBSTACLE_PERSIST_S = 5.0       # keep recently seen rocks this long to survive dropouts
+CLUSTER_RADIUS_M = 0.5         # cluster rocks within this radius before caching
+HIT_STREAK_MIN = 2             # require this many consecutive hits to consider an obstacle real
 
 
 def parse_args():
@@ -155,12 +158,15 @@ class YoloRockNode(Node):
 
         # State for avoidance and localization
         self.current_path = []          # list of np.array([x, y])
-        self.final_goal = None          # np.array([x, y])
+        self.final_goal = None          # np.array([x, y]) from last path message
+        self.mission_goal = None        # upstream goal (skip detour paths)
         self.rover_xy = None            # np.array([x, y])
         self.rover_yaw = 0.0
         self.active_detour = False
         self.detour_target = None       # np.array([x, y])
-        self.pending_goal = None        # goal to restore after detour
+        self.pending_goal = None        # goal to restore after detour (tracks mission_goal)
+        # Obstacle cache: list of dicts with pos, ts, hits for persistence + debouncing
+        self.obstacle_cache = []
 
         self.sub_left = self.create_subscription(
             Image,
@@ -217,9 +223,14 @@ class YoloRockNode(Node):
             pts.append(np.array([pose.pose.position.x, pose.pose.position.y], dtype=np.float64))
         self.current_path = pts
         self.final_goal = pts[-1]
-        # If we just replanned to a detour, remember where to return
-        if self.pending_goal is None:
-            self.pending_goal = self.final_goal
+        # Update mission_goal/pending_goal only if this path is not our own detour target
+        is_detour_path = (
+            self.detour_target is not None
+            and np.linalg.norm(self.final_goal - self.detour_target) < 0.25
+        )
+        if not is_detour_path:
+            self.mission_goal = self.final_goal
+            self.pending_goal = self.mission_goal
 
     def right_callback(self, msg: Image):
         """Receive right image and cache it."""
@@ -340,8 +351,56 @@ class YoloRockNode(Node):
             f"Published avoidance waypoint ({msg.x:.2f}, {msg.y:.2f})"
         )
 
+    def _cluster_points(self, points, radius):
+        """Simple greedy clustering; returns list of cluster centroids."""
+        clusters = []
+        used = [False] * len(points)
+        for i, pt in enumerate(points):
+            if used[i]:
+                continue
+            cluster = [pt]
+            used[i] = True
+            for j in range(i + 1, len(points)):
+                if used[j]:
+                    continue
+                if np.linalg.norm(points[j] - pt) <= radius:
+                    cluster.append(points[j])
+                    used[j] = True
+            clusters.append(np.mean(cluster, axis=0))
+        return clusters
+
+    def _update_obstacle_cache(self, new_points):
+        """Merge freshly seen rocks into cache with persistence and hit streaks."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        # Drop stale entries
+        self.obstacle_cache = [
+            entry for entry in self.obstacle_cache if (now - entry["ts"]) <= OBSTACLE_PERSIST_S
+        ]
+
+        # Cluster current frame points to reduce noise/duplicates
+        clustered = self._cluster_points(new_points, CLUSTER_RADIUS_M) if new_points else []
+
+        for pt in clustered:
+            # Find nearest cached entry within clustering radius
+            best_idx = None
+            best_dist = float("inf")
+            for idx, entry in enumerate(self.obstacle_cache):
+                dist = np.linalg.norm(pt - entry["pos"])
+                if dist < best_dist and dist <= CLUSTER_RADIUS_M:
+                    best_dist = dist
+                    best_idx = idx
+
+            if best_idx is not None:
+                entry = self.obstacle_cache[best_idx]
+                # Update position with a simple average to smooth jitter
+                entry["pos"] = 0.5 * (entry["pos"] + pt)
+                entry["ts"] = now
+                entry["hits"] += 1
+            else:
+                self.obstacle_cache.append({"pos": pt, "ts": now, "hits": 1})
+
     def handle_obstacle_avoidance(self, dets_np: np.ndarray):
-        """Check detections against current path and request a detour if needed."""
+        """Check detections (with persistence) and request/refresh detours."""
         if (
             self.rover_xy is None
             or len(self.current_path) < 2
@@ -349,12 +408,8 @@ class YoloRockNode(Node):
         ):
             return
 
-        rover_s, _, _, _ = self._project_on_path(self.rover_xy)
-        blocking_candidate = None
-        blocking_proj = None
-        blocking_dir = None
-        min_forward_s = float("inf")
-
+        # Collect current-frame rock positions in world
+        current_world = []
         for det in dets_np:
             body_xy = self._pixel_to_body_xy(det)
             if body_xy is None:
@@ -362,33 +417,62 @@ class YoloRockNode(Node):
             world_xy = self._body_to_world(body_xy)
             if world_xy is None:
                 continue
+            current_world.append(world_xy)
 
-            s, dist, proj, seg_dir = self._project_on_path(world_xy)
+        # Update cache so transient dropouts don't erase obstacles
+        self._update_obstacle_cache(current_world)
+        obstacles = [entry["pos"] for entry in self.obstacle_cache if entry["hits"] >= HIT_STREAK_MIN]
+        if not obstacles:
+            return
+
+        rover_s, _, _, _ = self._project_on_path(self.rover_xy)
+
+        # Find the most forward blocking obstacle in the corridor
+        blocking = None
+        blocking_proj = None
+        blocking_dir = None
+        min_forward_s = float("inf")
+
+        for pt in obstacles:
+            s, dist, proj, seg_dir = self._project_on_path(pt)
             if s <= rover_s + REPLAN_MIN_ADVANCE_M:
                 continue  # behind or too close to ignore
             if dist > AVOID_RADIUS_M:
-                continue  # not in our corridor
+                continue  # not in corridor
             if s < min_forward_s:
                 min_forward_s = s
-                blocking_candidate = world_xy
+                blocking = pt
                 blocking_proj = proj
                 blocking_dir = seg_dir
 
-        if blocking_candidate is None or self.active_detour:
+        if blocking is None:
             return
 
-        # Build a simple lateral detour around the blocking rock
-        delta = blocking_candidate - blocking_proj
-        cross = blocking_dir[0] * delta[1] - blocking_dir[1] * delta[0]
+        # Evaluate both sides; pick the side with larger clearance to all obstacles
         perp = np.array([-blocking_dir[1], blocking_dir[0]], dtype=np.float64)
-        side = -1.0 if cross >= 0.0 else 1.0  # go opposite side of the rock
         offset_mag = AVOID_RADIUS_M + DETROUR_EXTRA_M
-        detour_xy = blocking_candidate + side * offset_mag * perp
+
+        best_detour = None
+        best_clear = -np.inf
+        for side in (-1.0, 1.0):
+            candidate = blocking_proj + side * offset_mag * perp
+            clearance = min(np.linalg.norm(candidate - pt) for pt in obstacles)
+            if clearance > best_clear:
+                best_clear = clearance
+                best_detour = candidate
+
+        if best_detour is None:
+            return
+
+        # If we're already detouring and the target is essentially the same, keep it
+        if self.active_detour and self.detour_target is not None:
+            if float(np.linalg.norm(best_detour - self.detour_target)) < 0.25:
+                return
 
         self.active_detour = True
-        self.detour_target = detour_xy
-        self.pending_goal = self.final_goal
-        self.publish_waypoint(detour_xy)
+        self.detour_target = best_detour
+        # pending_goal keeps the mission goal (set in path_callback)
+        self.publish_waypoint(best_detour)
 
     def maybe_complete_detour(self):
         if not self.active_detour or self.rover_xy is None or self.detour_target is None:
