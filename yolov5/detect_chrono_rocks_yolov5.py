@@ -10,6 +10,8 @@ from geometry_msgs.msg import PoseStamped, Vector3
 from nav_msgs.msg import Path
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from visualization_msgs.msg import Marker, MarkerArray
+from builtin_interfaces.msg import Duration
 import torch
 
 import numpy as np
@@ -40,6 +42,8 @@ REPLAN_MIN_ADVANCE_M = 0.75    # ignore rocks behind the rover
 OBSTACLE_PERSIST_S = 5.0       # keep recently seen rocks this long to survive dropouts
 CLUSTER_RADIUS_M = 0.5         # cluster rocks within this radius before caching
 HIT_STREAK_MIN = 2             # require this many consecutive hits to consider an obstacle real
+GOAL_LINE_WEIGHT = 0.6         # penalty per meter of lateral offset from goal ray
+GOAL_SIDE_BONUS = 0.4          # bonus when detour side points toward goal direction
 
 
 def parse_args():
@@ -197,6 +201,16 @@ class YoloRockNode(Node):
             "/chrono_ros_node/input/driver_waypoint_update",
             10,
         )
+        self.path_viz_pub = self.create_publisher(
+            Path,
+            "/chrono_ros_node/debug/avoidance_path",
+            10,
+        )
+        self.marker_pub = self.create_publisher(
+            MarkerArray,
+            "/chrono_ros_node/debug/avoidance_markers",
+            10,
+        )
         self.pub_annotated = self.create_publisher(
             Image,
             "/chrono_ros_node/yolov5/annotated_left",
@@ -231,6 +245,7 @@ class YoloRockNode(Node):
         if not is_detour_path:
             self.mission_goal = self.final_goal
             self.pending_goal = self.mission_goal
+        self._publish_path_debug()
 
     def right_callback(self, msg: Image):
         """Receive right image and cache it."""
@@ -315,6 +330,53 @@ class YoloRockNode(Node):
                 best_dir = seg / seg_len
             s_accum += seg_len
         return best_s, best_dist, best_pt, best_dir
+
+    def _publish_path_debug(self):
+        """Publish nav_msgs/Path and markers so Foxglove can visualize detours."""
+        now = self.get_clock().now().to_msg()
+        if self.current_path:
+            path_msg = Path()
+            path_msg.header.stamp = now
+            path_msg.header.frame_id = "map"
+            for pt in self.current_path:
+                ps = PoseStamped()
+                ps.header.stamp = now
+                ps.header.frame_id = "map"
+                ps.pose.position.x = float(pt[0])
+                ps.pose.position.y = float(pt[1])
+                ps.pose.position.z = 0.0
+                path_msg.poses.append(ps)
+            self.path_viz_pub.publish(path_msg)
+
+        markers = MarkerArray()
+        marker_id = 0
+
+        def add_marker(xy, color_rgba, scale=0.35, shape=Marker.SPHERE):
+            nonlocal marker_id
+            m = Marker()
+            m.header.stamp = now
+            m.header.frame_id = "map"
+            m.id = marker_id
+            marker_id += 1
+            m.type = shape
+            m.action = Marker.ADD
+            m.pose.position.x = float(xy[0])
+            m.pose.position.y = float(xy[1])
+            m.pose.position.z = 0.0
+            m.scale.x = m.scale.y = m.scale.z = scale
+            m.color.r, m.color.g, m.color.b, m.color.a = color_rgba
+            m.lifetime = Duration(sec=0, nanosec=0)
+            markers.markers.append(m)
+
+        if self.detour_target is not None:
+            add_marker(self.detour_target, (1.0, 0.5, 0.0, 0.9), scale=0.45, shape=Marker.SPHERE)  # orange detour
+        if self.mission_goal is not None:
+            add_marker(self.mission_goal, (0.1, 0.8, 0.1, 0.9), scale=0.4, shape=Marker.CUBE)  # green final goal
+        if self.rover_xy is not None:
+            add_marker(self.rover_xy, (0.2, 0.4, 1.0, 0.9), scale=0.35, shape=Marker.ARROW)  # blue rover
+
+        if markers.markers:
+            self.marker_pub.publish(markers)
 
     def _pixel_to_body_xy(self, det):
         """Approximate rock position in rover body frame using depth + pixel offset."""
@@ -448,17 +510,37 @@ class YoloRockNode(Node):
         if blocking is None:
             return
 
-        # Evaluate both sides; pick the side with larger clearance to all obstacles
+        # Evaluate both sides; pick the side with larger clearance to all obstacles,
+        # but also bias toward the side that better aligns with the mission goal.
         perp = np.array([-blocking_dir[1], blocking_dir[0]], dtype=np.float64)
         offset_mag = AVOID_RADIUS_M + DETROUR_EXTRA_M
 
         best_detour = None
-        best_clear = -np.inf
+        best_score = -np.inf
+
+        goal_vec = None
+        goal_dir_norm = 0.0
+        goal_side_pref = 0.0  # +1 => goal to the left of path, -1 => right
+        if self.mission_goal is not None:
+            goal_vec = self.mission_goal - blocking_proj
+            goal_dir_norm = float(np.linalg.norm(goal_vec))
+            if goal_dir_norm < 1e-6:
+                goal_vec = None
+            else:
+                goal_side_pref = float(np.sign(np.cross(blocking_dir, goal_vec)))
+
         for side in (-1.0, 1.0):
             candidate = blocking_proj + side * offset_mag * perp
             clearance = min(np.linalg.norm(candidate - pt) for pt in obstacles)
-            if clearance > best_clear:
-                best_clear = clearance
+            score = clearance
+
+            if goal_vec is not None:
+                cross_track = abs(np.cross(goal_vec, candidate - blocking_proj)) / goal_dir_norm
+                score -= GOAL_LINE_WEIGHT * cross_track
+                score += GOAL_SIDE_BONUS * goal_side_pref * side
+
+            if score > best_score:
+                best_score = score
                 best_detour = candidate
 
         if best_detour is None:
@@ -473,6 +555,7 @@ class YoloRockNode(Node):
         self.detour_target = best_detour
         # pending_goal keeps the mission goal (set in path_callback)
         self.publish_waypoint(best_detour)
+        self._publish_path_debug()
 
     def maybe_complete_detour(self):
         if not self.active_detour or self.rover_xy is None or self.detour_target is None:
@@ -487,6 +570,7 @@ class YoloRockNode(Node):
         self.publish_waypoint(self.pending_goal)
         self.active_detour = False
         self.detour_target = None
+        self._publish_path_debug()
 
     def left_callback(self, msg: Image):
         self.frame_count += 1
